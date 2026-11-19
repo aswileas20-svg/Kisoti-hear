@@ -1,5 +1,4 @@
 
-
 name: Build Kisoti-Hear APK
 
 on:
@@ -27,8 +26,24 @@ jobs:
         with:
           gradle-version: '8.4'
 
+      - name: Check AndroidManifest XML
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          file = "app/src/main/AndroidManifest.xml"
+
+          try:
+              ET.parse(file)
+              print("MANIFEST XML IS VALID!")
+          except ET.ParseError as error:
+              print("MANIFEST ERROR FOUND!")
+              print("Details:", error)
+              raise
+          PY
+
       - name: Build Android APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
