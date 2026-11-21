@@ -162,7 +162,10 @@ private fun prepareWhisperModel() {
     }
 
     private fun startListening() {
-
+if (!modelReady) {
+    statusText.text = "Subiri Whisper Model iandaliwe kwanza."
+    return
+}
         val started = audioEngine.start()
 
         if (started) {
