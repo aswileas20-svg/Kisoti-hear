@@ -49,6 +49,7 @@ private var modelReady = false
         )
 
         createScreen()
+        prepareWhisperModel()
     }
 
     private fun createScreen() {
