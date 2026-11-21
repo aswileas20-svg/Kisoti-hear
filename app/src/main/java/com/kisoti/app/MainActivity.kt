@@ -9,11 +9,17 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-
+import android.os.Handler
+import android.os.Looper
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
+    
+private lateinit var whisperBridge: WhisperBridge
+private lateinit var transcriptText: TextView
 
+@Volatile
+private var modelReady = false
     private lateinit var audioEngine: AudioEngine
     private lateinit var statusText: TextView
     private lateinit var startButton: Button
