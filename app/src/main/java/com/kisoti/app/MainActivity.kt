@@ -27,6 +27,7 @@ private var modelReady = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        whisperBridge = WhisperBridge()
 
         audioEngine = AudioEngine(
             this,
