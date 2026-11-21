@@ -51,7 +51,49 @@ private var modelReady = false
         createScreen()
         prepareWhisperModel()
     }
+private fun prepareWhisperModel() {
 
+    statusText.text = "Kisoti-Hear inapakua Whisper Model..."
+
+    WhisperModelManager.download(
+        this,
+        object : WhisperModelManager.Listener {
+
+            override fun onProgress(percent: Int) {
+                statusText.text =
+                    "Inapakua Whisper Model: $percent%"
+            }
+
+            override fun onComplete(modelPath: String) {
+
+                statusText.text = "Inaandaa Whisper Model..."
+
+                Thread {
+
+                    val loaded = whisperBridge.loadModel(modelPath)
+
+                    runOnUiThread {
+
+                        if (loaded) {
+                            modelReady = true
+                            statusText.text =
+                                "Whisper Model iko tayari. Karibu!"
+                        } else {
+                            statusText.text =
+                                "Imeshindwa kuandaa Whisper Model."
+                        }
+                    }
+
+                }.start()
+            }
+
+            override fun onError(message: String) {
+                statusText.text =
+                    "Tatizo la Whisper Model: $message"
+            }
+        }
+    )
+}
     private fun createScreen() {
 
         val layout = LinearLayout(this).apply {
