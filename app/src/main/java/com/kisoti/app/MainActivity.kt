@@ -5,49 +5,130 @@ import android.app.Activity
 import android.os.Bundle
 import android.Manifest
 import android.content.pm.PackageManager
-import android.widget.TextView
 import android.view.Gravity
-import android.widget.Toast
-import android.os.Build
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
 
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
 
+    private lateinit var audioEngine: AudioEngine
+    private lateinit var statusText: TextView
+    private lateinit var startButton: Button
+    private lateinit var stopButton: Button
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val screen = TextView(this).apply {
-            text = "Kisoti-Hear\n\nKaribu kwenye Kisoti-Hear"
-            textSize = 22f
+        audioEngine = AudioEngine(
+            this,
+            object : AudioEngine.Listener {
+
+                override fun onAudioData(
+                    audioData: ShortArray,
+                    length: Int
+                ) {
+                    // Sauti itapelekwa kwa Whisper katika hatua inayofuata.
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        statusText.text = message
+                    }
+                }
+            }
+        )
+
+        createScreen()
+    }
+
+    private fun createScreen() {
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(30, 30, 30, 30)
+        }
+
+        val title = TextView(this).apply {
+            text = "Kisoti-Hear"
+            textSize = 28f
             gravity = Gravity.CENTER
         }
 
-        setContentView(screen)
+        statusText = TextView(this).apply {
+            text = "Karibu kwenye Kisoti-Hear"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setPadding(10, 40, 10, 40)
+        }
 
-        checkMicrophonePermission()
+        startButton = Button(this).apply {
+            text = "ANZA KUSIKILIZA"
+            setOnClickListener {
+                checkMicrophonePermission()
+            }
+        }
+
+        stopButton = Button(this).apply {
+            text = "SIMAMISHA"
+            isEnabled = false
+            setOnClickListener {
+                stopListening()
+            }
+        }
+
+        val transcriptText = TextView(this).apply {
+            text = "Matokeo ya sauti yataonekana hapa baada ya kuunganisha Whisper."
+            textSize = 17f
+            gravity = Gravity.CENTER
+            setPadding(10, 40, 10, 10)
+        }
+
+        layout.addView(title)
+        layout.addView(statusText)
+        layout.addView(startButton)
+        layout.addView(stopButton)
+        layout.addView(transcriptText)
+
+        setContentView(layout)
     }
 
     private fun checkMicrophonePermission() {
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
 
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                microphoneRequestCode
+            )
 
-                requestPermissions(
-                    arrayOf(Manifest.permission.RECORD_AUDIO),
-                    microphoneRequestCode
-                )
-
-            } else {
-                Toast.makeText(
-                    this,
-                    "Microphone iko tayari",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
+        } else {
+            startListening()
         }
+    }
+
+    private fun startListening() {
+
+        val started = audioEngine.start()
+
+        if (started) {
+            statusText.text = "Kisoti-Hear inasikiliza..."
+            startButton.isEnabled = false
+            stopButton.isEnabled = true
+        }
+    }
+
+    private fun stopListening() {
+
+        audioEngine.stop()
+
+        statusText.text = "Kusikiliza kumesimamishwa."
+        startButton.isEnabled = true
+        stopButton.isEnabled = false
     }
 
     override fun onRequestPermissionsResult(
@@ -66,20 +147,16 @@ class MainActivity : Activity() {
             if (grantResults.isNotEmpty() &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
-                Toast.makeText(
-                    this,
-                    "Ruhusa ya microphone imekubaliwa",
-                    Toast.LENGTH_SHORT
-                ).show()
+                startListening()
 
             } else {
-
-                Toast.makeText(
-                    this,
-                    "Ruhusa ya microphone imekataliwa",
-                    Toast.LENGTH_LONG
-                ).show()
+                statusText.text = "Ruhusa ya microphone imekataliwa."
             }
         }
+    }
+
+    override fun onDestroy() {
+        audioEngine.stop()
+        super.onDestroy()
     }
 }
