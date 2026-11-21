@@ -86,7 +86,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     params.n_threads = 4;
     params.language = "auto";
-    params.detect_language = true;
+    params.detect_language = false;
     params.no_context = true;
     params.no_timestamps = true;
     params.print_progress = false;
