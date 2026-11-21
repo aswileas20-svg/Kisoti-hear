@@ -130,7 +130,7 @@ private fun prepareWhisperModel() {
             }
         }
 
-        val transcriptText = TextView(this).apply {
+        transcriptText = TextView(this).apply { {
             text = "Matokeo ya sauti yataonekana hapa baada ya kuunganisha Whisper."
             textSize = 17f
             gravity = Gravity.CENTER
