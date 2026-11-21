@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - Kisoti-Hear-Test
 
 jobs:
   build:
@@ -21,6 +22,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -28,7 +32,6 @@ jobs:
 
       - name: Set up Android NDK and CMake
         run: |
-          yes | sdkmanager --licenses
           sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
 
       - name: Download Whisper.cpp
