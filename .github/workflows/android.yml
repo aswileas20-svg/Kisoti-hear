@@ -26,12 +26,20 @@ jobs:
         with:
           gradle-version: '8.4'
 
-          
       - name: Set up Android NDK and CMake
         run: |
           yes | sdkmanager --licenses
           sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
 
+      - name: Download Whisper.cpp
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/ggml-org/whisper.cpp.git app/src/main/cpp/whisper.cpp
+
+      - name: Verify Whisper.cpp
+        run: |
+          test -f app/src/main/cpp/whisper.cpp/CMakeLists.txt
+          test -f app/src/main/cpp/whisper.cpp/ggml/CMakeLists.txt
+          echo "WHISPER.CPP SOURCE IS READY!"
 
       - name: Check AndroidManifest XML
         run: |
