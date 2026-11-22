@@ -9,10 +9,14 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
+    private val sampleRate = 16000
+    private val chunkDurationSeconds = 5
+    private val chunkSize = sampleRate * chunkDurationSeconds
 
     private lateinit var whisperBridge: WhisperBridge
     private lateinit var transcriptText: TextView
@@ -23,6 +27,15 @@ class MainActivity : Activity() {
 
     @Volatile
     private var modelReady = false
+
+    private val transcriptionExecutor =
+        Executors.newSingleThreadExecutor()
+
+    private val audioLock = Any()
+    private val audioBuffer = ShortArray(chunkSize)
+
+    private var audioBufferSize = 0
+    private var hasTranscript = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,7 +50,7 @@ class MainActivity : Activity() {
                     audioData: ShortArray,
                     length: Int
                 ) {
-                    // Sauti itaunganishwa na Whisper katika hatua inayofuata.
+                    collectAudio(audioData, length)
                 }
 
                 override fun onError(message: String) {
@@ -54,7 +67,8 @@ class MainActivity : Activity() {
 
     private fun prepareWhisperModel() {
 
-        statusText.text = "Kisoti-Hear inapakua Whisper Model..."
+        statusText.text =
+            "Kisoti-Hear inapakua Whisper Model..."
 
         WhisperModelManager.download(
             this,
@@ -67,11 +81,13 @@ class MainActivity : Activity() {
 
                 override fun onComplete(modelPath: String) {
 
-                    statusText.text = "Inaandaa Whisper Model..."
+                    statusText.text =
+                        "Inaandaa Whisper Model..."
 
                     Thread {
 
-                        val loaded = whisperBridge.loadModel(modelPath)
+                        val loaded =
+                            whisperBridge.loadModel(modelPath)
 
                         runOnUiThread {
 
@@ -180,9 +196,112 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun collectAudio(
+        audioData: ShortArray,
+        length: Int
+    ) {
+
+        if (length <= 0) return
+
+        val completedChunks = mutableListOf<ShortArray>()
+
+        synchronized(audioLock) {
+
+            var sourcePosition = 0
+
+            while (sourcePosition < length) {
+
+                val available =
+                    chunkSize - audioBufferSize
+
+                val remaining =
+                    length - sourcePosition
+
+                val copyLength =
+                    minOf(available, remaining)
+
+                System.arraycopy(
+                    audioData,
+                    sourcePosition,
+                    audioBuffer,
+                    audioBufferSize,
+                    copyLength
+                )
+
+                audioBufferSize += copyLength
+                sourcePosition += copyLength
+
+                if (audioBufferSize == chunkSize) {
+
+                    completedChunks.add(
+                        audioBuffer.copyOf()
+                    )
+
+                    audioBufferSize = 0
+                }
+            }
+        }
+
+        for (chunk in completedChunks) {
+            sendToWhisper(chunk)
+        }
+    }
+
+    private fun sendToWhisper(audioData: ShortArray) {
+
+        transcriptionExecutor.execute {
+
+            try {
+
+                val result =
+                    whisperBridge.transcribe(audioData).trim()
+
+                if (result.isNotEmpty()) {
+
+                    runOnUiThread {
+
+                        if (!hasTranscript) {
+                            transcriptText.text = ""
+                            hasTranscript = true
+                        }
+
+                        transcriptText.append(result + "\n")
+                    }
+                }
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+                    statusText.text =
+                        "Tatizo la STT: ${e.message}"
+                }
+            }
+        }
+    }
+
     private fun stopListening() {
 
         audioEngine.stop()
+
+        var remainingAudio: ShortArray? = null
+
+        synchronized(audioLock) {
+
+            if (audioBufferSize >= sampleRate) {
+
+                remainingAudio =
+                    audioBuffer.copyOfRange(
+                        0,
+                        audioBufferSize
+                    )
+            }
+
+            audioBufferSize = 0
+        }
+
+        remainingAudio?.let {
+            sendToWhisper(it)
+        }
 
         statusText.text = "Kusikiliza kumesimamishwa."
         startButton.isEnabled = true
@@ -203,7 +322,8 @@ class MainActivity : Activity() {
         if (requestCode == microphoneRequestCode) {
 
             if (grantResults.isNotEmpty() &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                grantResults[0] ==
+                PackageManager.PERMISSION_GRANTED) {
 
                 startListening()
 
@@ -215,8 +335,19 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+
         audioEngine.stop()
-        whisperBridge.close()
+
+        synchronized(audioLock) {
+            audioBufferSize = 0
+        }
+
+        transcriptionExecutor.execute {
+            whisperBridge.close()
+        }
+
+        transcriptionExecutor.shutdown()
+
         super.onDestroy()
     }
 }
