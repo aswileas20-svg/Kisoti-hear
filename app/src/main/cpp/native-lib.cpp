@@ -22,7 +22,8 @@ Java_com_kisoti_app_WhisperBridge_nativeInit(
         return 0;
     }
 
-    const char* path = env->GetStringUTFChars(modelPath, nullptr);
+    const char* path =
+            env->GetStringUTFChars(modelPath, nullptr);
 
     if (path == nullptr) {
         return 0;
@@ -72,7 +73,8 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
     std::vector<float> samples(length);
 
     for (jsize i = 0; i < length; i++) {
-        samples[i] = static_cast<float>(audio[i]) / 32768.0f;
+        samples[i] =
+                static_cast<float>(audio[i]) / 32768.0f;
     }
 
     env->ReleaseShortArrayElements(
@@ -82,13 +84,19 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
     );
 
     whisper_full_params params =
-            whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+            whisper_full_default_params(
+                    WHISPER_SAMPLING_GREEDY
+            );
 
     params.n_threads = 4;
     params.language = "auto";
     params.detect_language = false;
+
     params.no_context = true;
     params.no_timestamps = true;
+    params.single_segment = true;
+    params.max_tokens = 0;
+
     params.print_progress = false;
     params.print_realtime = false;
     params.print_timestamps = false;
@@ -109,6 +117,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
     int segments = whisper_full_n_segments(context);
 
     for (int i = 0; i < segments; i++) {
+
         const char* text =
                 whisper_full_get_segment_text(context, i);
 
