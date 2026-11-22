@@ -10,13 +10,18 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
     private val sampleRate = 16000
-    private val chunkDurationSeconds = 5
-    private val chunkSize = sampleRate * chunkDurationSeconds
+
+    // Dirisha la sauti la sekunde 5
+    private val windowSize = sampleRate * 5
+
+    // Sasisha dirisha kila baada ya sekunde 1
+    private val updateInterval = sampleRate
 
     private lateinit var whisperBridge: WhisperBridge
     private lateinit var transcriptText: TextView
@@ -31,10 +36,18 @@ class MainActivity : Activity() {
     private val transcriptionExecutor =
         Executors.newSingleThreadExecutor()
 
-    private val audioLock = Any()
-    private val audioBuffer = ShortArray(chunkSize)
+    private val inferenceRunning = AtomicBoolean(false)
 
-    private var audioBufferSize = 0
+    private val audioLock = Any()
+
+    private val audioRingBuffer = ShortArray(windowSize)
+
+    private var ringWritePosition = 0
+    private var ringSamplesAvailable = 0
+    private var samplesSinceLastInference = 0
+
+    private var previousWindowWords: List<String> = emptyList()
+
     private var hasTranscript = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,8 +88,10 @@ class MainActivity : Activity() {
             object : WhisperModelManager.Listener {
 
                 override fun onProgress(percent: Int) {
-                    statusText.text =
-                        "Inapakua Whisper Model: $percent%"
+                    runOnUiThread {
+                        statusText.text =
+                            "Inapakua Whisper Model: $percent%"
+                    }
                 }
 
                 override fun onComplete(modelPath: String) {
@@ -105,8 +120,10 @@ class MainActivity : Activity() {
                 }
 
                 override fun onError(message: String) {
-                    statusText.text =
-                        "Tatizo la Whisper Model: $message"
+                    runOnUiThread {
+                        statusText.text =
+                            "Tatizo la Whisper Model: $message"
+                    }
                 }
             }
         )
@@ -187,10 +204,22 @@ class MainActivity : Activity() {
             return
         }
 
+        synchronized(audioLock) {
+            ringWritePosition = 0
+            ringSamplesAvailable = 0
+            samplesSinceLastInference = 0
+        }
+
+        transcriptionExecutor.execute {
+            previousWindowWords = emptyList()
+        }
+
         val started = audioEngine.start()
 
         if (started) {
-            statusText.text = "Kisoti-Hear inasikiliza..."
+            statusText.text =
+                "Kisoti-Hear inasikiliza moja kwa moja..."
+
             startButton.isEnabled = false
             stopButton.isEnabled = true
         }
@@ -203,51 +232,52 @@ class MainActivity : Activity() {
 
         if (length <= 0) return
 
-        val completedChunks = mutableListOf<ShortArray>()
+        var snapshot: ShortArray? = null
 
         synchronized(audioLock) {
 
-            var sourcePosition = 0
+            val safeLength = minOf(length, audioData.size)
 
-            while (sourcePosition < length) {
+            for (i in 0 until safeLength) {
 
-                val available =
-                    chunkSize - audioBufferSize
+                audioRingBuffer[ringWritePosition] =
+                    audioData[i]
 
-                val remaining =
-                    length - sourcePosition
+                ringWritePosition =
+                    (ringWritePosition + 1) % windowSize
 
-                val copyLength =
-                    minOf(available, remaining)
+                if (ringSamplesAvailable < windowSize) {
+                    ringSamplesAvailable++
+                }
+            }
 
-                System.arraycopy(
-                    audioData,
-                    sourcePosition,
-                    audioBuffer,
-                    audioBufferSize,
-                    copyLength
-                )
+            samplesSinceLastInference += safeLength
 
-                audioBufferSize += copyLength
-                sourcePosition += copyLength
+            if (ringSamplesAvailable >= windowSize &&
+                samplesSinceLastInference >= updateInterval) {
 
-                if (audioBufferSize == chunkSize) {
+                samplesSinceLastInference %= updateInterval
 
-                    completedChunks.add(
-                        audioBuffer.copyOf()
-                    )
+                snapshot = ShortArray(windowSize) { index ->
 
-                    audioBufferSize = 0
+                    audioRingBuffer[
+                        (ringWritePosition + index) % windowSize
+                    ]
                 }
             }
         }
 
-        for (chunk in completedChunks) {
-            sendToWhisper(chunk)
+        snapshot?.let {
+            sendToWhisper(it)
         }
     }
 
     private fun sendToWhisper(audioData: ShortArray) {
+
+        // Usiruhusu kazi za Whisper kujikusanya.
+        if (!inferenceRunning.compareAndSet(false, true)) {
+            return
+        }
 
         transcriptionExecutor.execute {
 
@@ -258,14 +288,26 @@ class MainActivity : Activity() {
 
                 if (result.isNotEmpty()) {
 
-                    runOnUiThread {
+                    val currentWords =
+                        result.split(Regex("\\s+"))
+                            .filter { it.isNotBlank() }
 
-                        if (!hasTranscript) {
-                            transcriptText.text = ""
-                            hasTranscript = true
+                    val newWords =
+                        extractNewWords(currentWords)
+
+                    if (newWords.isNotEmpty()) {
+
+                        runOnUiThread {
+
+                            if (!hasTranscript) {
+                                transcriptText.text = ""
+                                hasTranscript = true
+                            }
+
+                            transcriptText.append(
+                                newWords.joinToString(" ") + " "
+                            )
                         }
-
-                        transcriptText.append(result + "\n")
                     }
                 }
 
@@ -275,8 +317,62 @@ class MainActivity : Activity() {
                     statusText.text =
                         "Tatizo la STT: ${e.message}"
                 }
+
+            } finally {
+                inferenceRunning.set(false)
             }
         }
+    }
+
+    private fun extractNewWords(
+        currentWords: List<String>
+    ): List<String> {
+
+        var overlap = 0
+
+        val maxOverlap =
+            minOf(
+                previousWindowWords.size,
+                currentWords.size
+            )
+
+        for (size in maxOverlap downTo 1) {
+
+            var matches = true
+
+            for (i in 0 until size) {
+
+                val oldWord =
+                    normalizeWord(
+                        previousWindowWords[
+                            previousWindowWords.size - size + i
+                        ]
+                    )
+
+                val newWord =
+                    normalizeWord(currentWords[i])
+
+                if (oldWord != newWord) {
+                    matches = false
+                    break
+                }
+            }
+
+            if (matches) {
+                overlap = size
+                break
+            }
+        }
+
+        previousWindowWords = currentWords
+
+        return currentWords.drop(overlap)
+    }
+
+    private fun normalizeWord(word: String): String {
+
+        return word.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
     }
 
     private fun stopListening() {
@@ -287,23 +383,31 @@ class MainActivity : Activity() {
 
         synchronized(audioLock) {
 
-            if (audioBufferSize >= sampleRate) {
+            val available =
+                minOf(ringSamplesAvailable, windowSize)
 
-                remainingAudio =
-                    audioBuffer.copyOfRange(
-                        0,
-                        audioBufferSize
-                    )
+            if (available >= sampleRate) {
+
+                val startPosition =
+                    (ringWritePosition - available + windowSize) %
+                            windowSize
+
+                remainingAudio = ShortArray(available) { index ->
+
+                    audioRingBuffer[
+                        (startPosition + index) % windowSize
+                    ]
+                }
             }
-
-            audioBufferSize = 0
         }
 
         remainingAudio?.let {
             sendToWhisper(it)
         }
 
-        statusText.text = "Kusikiliza kumesimamishwa."
+        statusText.text =
+            "Kusikiliza kumesimamishwa."
+
         startButton.isEnabled = true
         stopButton.isEnabled = false
     }
@@ -339,7 +443,7 @@ class MainActivity : Activity() {
         audioEngine.stop()
 
         synchronized(audioLock) {
-            audioBufferSize = 0
+            ringSamplesAvailable = 0
         }
 
         transcriptionExecutor.execute {
