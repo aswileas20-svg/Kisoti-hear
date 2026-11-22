@@ -9,24 +9,24 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.os.Handler
-import android.os.Looper
+
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
-    
-private lateinit var whisperBridge: WhisperBridge
-private lateinit var transcriptText: TextView
 
-@Volatile
-private var modelReady = false
+    private lateinit var whisperBridge: WhisperBridge
+    private lateinit var transcriptText: TextView
     private lateinit var audioEngine: AudioEngine
     private lateinit var statusText: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
 
+    @Volatile
+    private var modelReady = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         whisperBridge = WhisperBridge()
 
         audioEngine = AudioEngine(
@@ -37,7 +37,7 @@ private var modelReady = false
                     audioData: ShortArray,
                     length: Int
                 ) {
-                    // Sauti itapelekwa kwa Whisper katika hatua inayofuata.
+                    // Sauti itaunganishwa na Whisper katika hatua inayofuata.
                 }
 
                 override fun onError(message: String) {
@@ -51,49 +51,51 @@ private var modelReady = false
         createScreen()
         prepareWhisperModel()
     }
-private fun prepareWhisperModel() {
 
-    statusText.text = "Kisoti-Hear inapakua Whisper Model..."
+    private fun prepareWhisperModel() {
 
-    WhisperModelManager.download(
-        this,
-        object : WhisperModelManager.Listener {
+        statusText.text = "Kisoti-Hear inapakua Whisper Model..."
 
-            override fun onProgress(percent: Int) {
-                statusText.text =
-                    "Inapakua Whisper Model: $percent%"
-            }
+        WhisperModelManager.download(
+            this,
+            object : WhisperModelManager.Listener {
 
-            override fun onComplete(modelPath: String) {
+                override fun onProgress(percent: Int) {
+                    statusText.text =
+                        "Inapakua Whisper Model: $percent%"
+                }
 
-                statusText.text = "Inaandaa Whisper Model..."
+                override fun onComplete(modelPath: String) {
 
-                Thread {
+                    statusText.text = "Inaandaa Whisper Model..."
 
-                    val loaded = whisperBridge.loadModel(modelPath)
+                    Thread {
 
-                    runOnUiThread {
+                        val loaded = whisperBridge.loadModel(modelPath)
 
-                        if (loaded) {
-                            modelReady = true
-                            statusText.text =
-                                "Whisper Model iko tayari. Karibu!"
-                        } else {
-                            statusText.text =
-                                "Imeshindwa kuandaa Whisper Model."
+                        runOnUiThread {
+
+                            if (loaded) {
+                                modelReady = true
+                                statusText.text =
+                                    "Whisper Model iko tayari. Karibu!"
+                            } else {
+                                statusText.text =
+                                    "Imeshindwa kuandaa Whisper Model."
+                            }
                         }
-                    }
 
-                }.start()
-            }
+                    }.start()
+                }
 
-            override fun onError(message: String) {
-                statusText.text =
-                    "Tatizo la Whisper Model: $message"
+                override fun onError(message: String) {
+                    statusText.text =
+                        "Tatizo la Whisper Model: $message"
+                }
             }
-        }
-    )
-}
+        )
+    }
+
     private fun createScreen() {
 
         val layout = LinearLayout(this).apply {
@@ -130,8 +132,8 @@ private fun prepareWhisperModel() {
             }
         }
 
-        transcriptText = TextView(this).apply { {
-            text = "Matokeo ya sauti yataonekana hapa baada ya kuunganisha Whisper."
+        transcriptText = TextView(this).apply {
+            text = "Matokeo ya sauti yataonekana hapa."
             textSize = 17f
             gravity = Gravity.CENTER
             setPadding(10, 40, 10, 10)
@@ -162,10 +164,13 @@ private fun prepareWhisperModel() {
     }
 
     private fun startListening() {
-if (!modelReady) {
-    statusText.text = "Subiri Whisper Model iandaliwe kwanza."
-    return
-}
+
+        if (!modelReady) {
+            statusText.text =
+                "Subiri Whisper Model iandaliwe kwanza."
+            return
+        }
+
         val started = audioEngine.start()
 
         if (started) {
@@ -203,13 +208,15 @@ if (!modelReady) {
                 startListening()
 
             } else {
-                statusText.text = "Ruhusa ya microphone imekataliwa."
+                statusText.text =
+                    "Ruhusa ya microphone imekataliwa."
             }
         }
     }
 
     override fun onDestroy() {
         audioEngine.stop()
+        whisperBridge.close()
         super.onDestroy()
     }
 }
