@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -50,6 +51,18 @@ class MainActivity : Activity() {
 
     private var hasTranscript = false
 
+    @Volatile
+    private var firstAudioToastShown = false
+
+    @Volatile
+    private var firstWindowToastShown = false
+
+    @Volatile
+    private var firstInferenceStarted = false
+
+    // Hifadhi matokeo matatu ya mwanzo kwa ajili ya uchunguzi
+    private var inferenceResultCount = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -69,6 +82,7 @@ class MainActivity : Activity() {
                 override fun onError(message: String) {
                     runOnUiThread {
                         statusText.text = message
+                        showToast(message)
                     }
                 }
             }
@@ -76,6 +90,16 @@ class MainActivity : Activity() {
 
         createScreen()
         prepareWhisperModel()
+    }
+
+    private fun showToast(message: String) {
+        runOnUiThread {
+            Toast.makeText(
+                applicationContext,
+                message,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     private fun prepareWhisperModel() {
@@ -110,9 +134,13 @@ class MainActivity : Activity() {
                                 modelReady = true
                                 statusText.text =
                                     "Whisper Model iko tayari. Karibu!"
+
+                                showToast("Whisper Model imepakiwa vizuri.")
                             } else {
                                 statusText.text =
                                     "Imeshindwa kuandaa Whisper Model."
+
+                                showToast("Tatizo: Whisper Model haijapakiwa.")
                             }
                         }
 
@@ -123,6 +151,8 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         statusText.text =
                             "Tatizo la Whisper Model: $message"
+
+                        showToast("Model error: $message")
                     }
                 }
             }
@@ -201,6 +231,8 @@ class MainActivity : Activity() {
         if (!modelReady) {
             statusText.text =
                 "Subiri Whisper Model iandaliwe kwanza."
+
+            showToast("Whisper Model bado haijawa tayari.")
             return
         }
 
@@ -210,8 +242,16 @@ class MainActivity : Activity() {
             samplesSinceLastInference = 0
         }
 
+        firstAudioToastShown = false
+        firstWindowToastShown = false
+        firstInferenceStarted = false
+        hasTranscript = false
+
+        transcriptText.text = "Nasubiri sauti..."
+
         transcriptionExecutor.execute {
             previousWindowWords = emptyList()
+            inferenceResultCount = 0
         }
 
         val started = audioEngine.start()
@@ -222,6 +262,10 @@ class MainActivity : Activity() {
 
             startButton.isEnabled = false
             stopButton.isEnabled = true
+
+            showToast("Microphone imeanza. Ongea sasa.")
+        } else {
+            showToast("Microphone haikuweza kuanza.")
         }
     }
 
@@ -231,6 +275,11 @@ class MainActivity : Activity() {
     ) {
 
         if (length <= 0) return
+
+        if (!firstAudioToastShown) {
+            firstAudioToastShown = true
+            showToast("Hatua 1: Microphone inapokea sauti.")
+        }
 
         var snapshot: ShortArray? = null
 
@@ -264,6 +313,11 @@ class MainActivity : Activity() {
                         (ringWritePosition + index) % windowSize
                     ]
                 }
+
+                if (!firstWindowToastShown) {
+                    firstWindowToastShown = true
+                    showToast("Hatua 2: Sauti ya sekunde 5 imekusanywa.")
+                }
             }
         }
 
@@ -283,10 +337,23 @@ class MainActivity : Activity() {
 
             try {
 
+                if (!firstInferenceStarted) {
+                    firstInferenceStarted = true
+                    showToast("Hatua 3: Sauti inatumwa kwa Whisper.")
+                }
+
                 val result =
                     whisperBridge.transcribe(audioData).trim()
 
+                inferenceResultCount++
+
                 if (result.isNotEmpty()) {
+
+                    if (inferenceResultCount <= 3) {
+                        showToast(
+                            "Whisper imerudisha maandishi: ${result.length} herufi."
+                        )
+                    }
 
                     val currentWords =
                         result.split(Regex("\\s+"))
@@ -309,6 +376,14 @@ class MainActivity : Activity() {
                             )
                         }
                     }
+
+                } else {
+
+                    if (inferenceResultCount <= 3) {
+                        showToast(
+                            "Whisper imerudisha matokeo tupu. Jaribio $inferenceResultCount."
+                        )
+                    }
                 }
 
             } catch (e: Exception) {
@@ -316,6 +391,8 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     statusText.text =
                         "Tatizo la STT: ${e.message}"
+
+                    showToast("STT error: ${e.message}")
                 }
 
             } finally {
@@ -410,6 +487,8 @@ class MainActivity : Activity() {
 
         startButton.isEnabled = true
         stopButton.isEnabled = false
+
+        showToast("Kusikiliza kumesimamishwa.")
     }
 
     override fun onRequestPermissionsResult(
@@ -434,6 +513,8 @@ class MainActivity : Activity() {
             } else {
                 statusText.text =
                     "Ruhusa ya microphone imekataliwa."
+
+                showToast("Ruhusa ya microphone imekataliwa.")
             }
         }
     }
