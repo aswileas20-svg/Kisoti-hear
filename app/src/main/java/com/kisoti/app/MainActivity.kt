@@ -3,6 +3,8 @@ package com.kisoti.app
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.Manifest
 import android.content.pm.PackageManager
 import android.view.Gravity
@@ -27,6 +29,8 @@ class MainActivity : Activity() {
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     @Volatile
     private var modelReady = false
 
@@ -36,7 +40,6 @@ class MainActivity : Activity() {
     private val transcriptionExecutor =
         Executors.newSingleThreadExecutor()
 
-    // Foleni ya kuhifadhi dirisha la hivi karibuni la sauti.
     private val pendingLock = Any()
 
     private var pendingAudio: ShortArray? = null
@@ -52,7 +55,6 @@ class MainActivity : Activity() {
     private var ringSamplesAvailable = 0
     private var samplesSinceLastInference = 0
 
-    // Hutumiwa na worker mmoja tu.
     private var previousWindowWords: List<String> = emptyList()
     private var inferenceResultCount = 0
 
@@ -69,6 +71,56 @@ class MainActivity : Activity() {
 
     @Volatile
     private var busyToastShown = false
+
+    private val diagnosticRunnable = object : Runnable {
+
+        override fun run() {
+
+            if (!modelReady) return
+
+            val active = synchronized(pendingLock) {
+                workerRunning
+            }
+
+            if (!active) return
+
+            try {
+
+                val stage = whisperBridge.getNativeStage()
+                val result = whisperBridge.getLastResult()
+                val samples = whisperBridge.getLastSamples()
+                val segments = whisperBridge.getLastSegments()
+
+                val message = when (stage) {
+
+                    2 -> {
+                        "WHISPER HATUA 2: Bado inachakata sauti...\n" +
+                        "Sampuli: $samples"
+                    }
+
+                    3 -> {
+                        "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
+                        "Result: $result\n" +
+                        "Sampuli: $samples\n" +
+                        "Segments: $segments"
+                    }
+
+                    else -> {
+                        "Whisper inajiandaa kuchakata sauti..."
+                    }
+                }
+
+                statusText.text = message
+
+            } catch (e: Exception) {
+
+                statusText.text =
+                    "Tatizo la vipimo vya Whisper: ${e.message}"
+            }
+
+            mainHandler.postDelayed(this, 1000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -251,9 +303,11 @@ class MainActivity : Activity() {
             return
         }
 
-        // HATUZUII microphone kwa sababu Whisper inachakata sauti.
-
         currentSession++
+
+        synchronized(pendingLock) {
+            pendingAudio = null
+        }
 
         synchronized(audioLock) {
             ringWritePosition = 0
@@ -350,13 +404,10 @@ class MainActivity : Activity() {
         }
     }
 
-    // Hifadhi dirisha la mwisho na uanzishe worker mmoja tu.
     private fun sendToWhisper(audioData: ShortArray) {
 
         synchronized(pendingLock) {
 
-            // Dirisha jipya linachukua nafasi ya la zamani
-            // ambalo bado halijaanza kuchakatwa.
             pendingAudio = audioData.copyOf()
 
             if (!workerRunning) {
@@ -367,6 +418,14 @@ class MainActivity : Activity() {
                     transcriptionExecutor.execute {
                         processPendingAudio()
                     }
+
+                    mainHandler.removeCallbacks(
+                        diagnosticRunnable
+                    )
+
+                    mainHandler.post(
+                        diagnosticRunnable
+                    )
 
                 } catch (e: Exception) {
                     workerRunning = false
@@ -390,7 +449,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // Worker mmoja anachakata kazi moja baada ya nyingine.
     private fun processPendingAudio() {
 
         while (true) {
@@ -434,7 +492,6 @@ class MainActivity : Activity() {
 
                 inferenceResultCount++
 
-                // Usionyeshe matokeo ya session iliyopita.
                 if (jobSession != currentSession) {
                     continue
                 }
@@ -617,6 +674,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+
+        mainHandler.removeCallbacks(diagnosticRunnable)
 
         audioEngine.stop()
 
