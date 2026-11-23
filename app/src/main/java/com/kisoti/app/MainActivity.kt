@@ -11,17 +11,13 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
     private val sampleRate = 16000
 
-    // Dirisha la sauti la sekunde 5
     private val windowSize = sampleRate * 5
-
-    // Sasisha dirisha kila baada ya sekunde 1
     private val updateInterval = sampleRate
 
     private lateinit var whisperBridge: WhisperBridge
@@ -34,13 +30,19 @@ class MainActivity : Activity() {
     @Volatile
     private var modelReady = false
 
+    @Volatile
+    private var currentSession = 0
+
     private val transcriptionExecutor =
         Executors.newSingleThreadExecutor()
 
-    private val inferenceRunning = AtomicBoolean(false)
+    // Foleni ya kuhifadhi dirisha la hivi karibuni la sauti.
+    private val pendingLock = Any()
 
-    @Volatile
-    private var busyToastShown = false
+    private var pendingAudio: ShortArray? = null
+    private var workerRunning = false
+
+    private var processingSession = -1
 
     private val audioLock = Any()
 
@@ -50,7 +52,9 @@ class MainActivity : Activity() {
     private var ringSamplesAvailable = 0
     private var samplesSinceLastInference = 0
 
+    // Hutumiwa na worker mmoja tu.
     private var previousWindowWords: List<String> = emptyList()
+    private var inferenceResultCount = 0
 
     private var hasTranscript = false
 
@@ -63,7 +67,8 @@ class MainActivity : Activity() {
     @Volatile
     private var firstInferenceStarted = false
 
-    private var inferenceResultCount = 0
+    @Volatile
+    private var busyToastShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -134,6 +139,7 @@ class MainActivity : Activity() {
 
                             if (loaded) {
                                 modelReady = true
+
                                 statusText.text =
                                     "Whisper Model iko tayari. Karibu!"
 
@@ -189,6 +195,7 @@ class MainActivity : Activity() {
 
         startButton = Button(this).apply {
             text = "ANZA KUSIKILIZA"
+
             setOnClickListener {
                 checkMicrophonePermission()
             }
@@ -197,6 +204,7 @@ class MainActivity : Activity() {
         stopButton = Button(this).apply {
             text = "SIMAMISHA"
             isEnabled = false
+
             setOnClickListener {
                 stopListening()
             }
@@ -243,10 +251,9 @@ class MainActivity : Activity() {
             return
         }
 
-        if (inferenceRunning.get()) {
-            showToast("Whisper bado inachakata sauti ya awali.")
-            return
-        }
+        // HATUZUII microphone kwa sababu Whisper inachakata sauti.
+
+        currentSession++
 
         synchronized(audioLock) {
             ringWritePosition = 0
@@ -261,11 +268,6 @@ class MainActivity : Activity() {
         hasTranscript = false
 
         transcriptText.text = "Nasubiri sauti..."
-
-        transcriptionExecutor.execute {
-            previousWindowWords = emptyList()
-            inferenceResultCount = 0
-        }
 
         val started = audioEngine.start()
 
@@ -293,6 +295,7 @@ class MainActivity : Activity() {
 
         if (!firstAudioToastShown) {
             firstAudioToastShown = true
+
             showToast(
                 "Hatua 1: Microphone inapokea sauti."
             )
@@ -347,24 +350,76 @@ class MainActivity : Activity() {
         }
     }
 
+    // Hifadhi dirisha la mwisho na uanzishe worker mmoja tu.
     private fun sendToWhisper(audioData: ShortArray) {
 
-        if (!inferenceRunning.compareAndSet(false, true)) {
+        synchronized(pendingLock) {
 
-            if (!busyToastShown) {
-                busyToastShown = true
+            // Dirisha jipya linachukua nafasi ya la zamani
+            // ambalo bado halijaanza kuchakatwa.
+            pendingAudio = audioData.copyOf()
 
-                showToast(
-                    "Whisper bado inachakata sauti ya awali."
-                )
+            if (!workerRunning) {
+
+                workerRunning = true
+
+                try {
+                    transcriptionExecutor.execute {
+                        processPendingAudio()
+                    }
+
+                } catch (e: Exception) {
+                    workerRunning = false
+                    pendingAudio = null
+
+                    showToast(
+                        "Imeshindwa kupanga kazi ya Whisper: ${e.message}"
+                    )
+                }
+
+            } else {
+
+                if (!busyToastShown) {
+                    busyToastShown = true
+
+                    showToast(
+                        "Whisper inachakata. Sauti mpya imehifadhiwa."
+                    )
+                }
+            }
+        }
+    }
+
+    // Worker mmoja anachakata kazi moja baada ya nyingine.
+    private fun processPendingAudio() {
+
+        while (true) {
+
+            val audioData: ShortArray
+            val jobSession: Int
+
+            synchronized(pendingLock) {
+
+                val nextAudio = pendingAudio
+
+                if (nextAudio == null) {
+                    workerRunning = false
+                    busyToastShown = false
+                    return
+                }
+
+                audioData = nextAudio
+                pendingAudio = null
+                jobSession = currentSession
             }
 
-            return
-        }
-
-        transcriptionExecutor.execute {
-
             try {
+
+                if (processingSession != jobSession) {
+                    processingSession = jobSession
+                    previousWindowWords = emptyList()
+                    inferenceResultCount = 0
+                }
 
                 if (!firstInferenceStarted) {
                     firstInferenceStarted = true
@@ -374,14 +429,15 @@ class MainActivity : Activity() {
                     )
                 }
 
-                showToast(
-                    "Kazi imepelekwa kwenye foleni ya Whisper."
-                )
-
                 val result =
                     whisperBridge.transcribe(audioData).trim()
 
                 inferenceResultCount++
+
+                // Usionyeshe matokeo ya session iliyopita.
+                if (jobSession != currentSession) {
+                    continue
+                }
 
                 if (result.isNotEmpty()) {
 
@@ -401,6 +457,10 @@ class MainActivity : Activity() {
                     if (newWords.isNotEmpty()) {
 
                         runOnUiThread {
+
+                            if (jobSession != currentSession) {
+                                return@runOnUiThread
+                            }
 
                             if (!hasTranscript) {
                                 transcriptText.text = ""
@@ -432,9 +492,6 @@ class MainActivity : Activity() {
                         "STT error: ${e.message}"
                     )
                 }
-
-            } finally {
-                inferenceRunning.set(false)
             }
         }
     }
@@ -521,7 +578,7 @@ class MainActivity : Activity() {
         }
 
         statusText.text =
-            "Kusikiliza kumesimamishwa."
+            "Kusikiliza kumesimamishwa. Whisper inaweza kuendelea kuchakata."
 
         startButton.isEnabled = true
         stopButton.isEnabled = false
@@ -562,10 +619,6 @@ class MainActivity : Activity() {
     override fun onDestroy() {
 
         audioEngine.stop()
-
-        synchronized(audioLock) {
-            ringSamplesAvailable = 0
-        }
 
         transcriptionExecutor.execute {
             whisperBridge.close()
