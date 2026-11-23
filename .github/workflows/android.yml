@@ -28,7 +28,6 @@ jobs:
       - name: Locate Android SDK Manager
         run: |
           set -e
-
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$SDKMANAGER" ]; then
@@ -82,9 +81,9 @@ jobs:
           print("MANIFEST XML IS VALID!")
           PY
 
-      - name: Build Android APK
+      - name: Build Android Release APK
         run: |
-          gradle assembleDebug --stacktrace
+          gradle assembleRelease --stacktrace
 
       - name: Sign APK with permanent key
         env:
@@ -97,7 +96,6 @@ jobs:
           test -n "$KEYSTORE_PASSWORD"
 
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > kisoti-release.jks
-
           test -s kisoti-release.jks
 
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
@@ -105,17 +103,17 @@ jobs:
             --ks-key-alias kisoti \
             --ks-pass env:KEYSTORE_PASSWORD \
             --key-pass env:KEYSTORE_PASSWORD \
-            --out app/build/outputs/apk/debug/Kisoti-Hear.apk \
-            app/build/outputs/apk/debug/app-debug.apk
+            --out app/build/outputs/apk/release/Kisoti-Hear.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
 
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify \
-            app/build/outputs/apk/debug/Kisoti-Hear.apk
+            app/build/outputs/apk/release/Kisoti-Hear.apk
 
           rm -f kisoti-release.jks
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: Kisoti-Hear-Signed-APK
-          path: app/build/outputs/apk/debug/Kisoti-Hear.apk
+          name: Kisoti-Hear-Release-APK
+          path: app/build/outputs/apk/release/Kisoti-Hear.apk
           retention-days: 7
