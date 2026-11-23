@@ -20,6 +20,14 @@ class WhisperBridge {
 
     private external fun nativeFree(contextPointer: Long)
 
+    private external fun nativeGetStage(): Int
+
+    private external fun nativeGetLastResult(): Int
+
+    private external fun nativeGetLastSamples(): Int
+
+    private external fun nativeGetLastSegments(): Int
+
     @Synchronized
     fun loadModel(modelPath: String): Boolean {
         if (nativeContext != 0L) {
@@ -39,6 +47,22 @@ class WhisperBridge {
         return nativeTranscribe(nativeContext, audioData)
     }
 
+    fun getNativeStage(): Int {
+        return nativeGetStage()
+    }
+
+    fun getLastResult(): Int {
+        return nativeGetLastResult()
+    }
+
+    fun getLastSamples(): Int {
+        return nativeGetLastSamples()
+    }
+
+    fun getLastSegments(): Int {
+        return nativeGetLastSegments()
+    }
+
     @Synchronized
     fun close() {
         if (nativeContext != 0L) {
@@ -51,4 +75,3 @@ class WhisperBridge {
         return nativeContext != 0L
     }
 }
-
