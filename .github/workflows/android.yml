@@ -32,7 +32,7 @@ jobs:
 
       - name: Set up Android NDK and CMake
         run: |
-          sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
+          sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
 
       - name: Download Whisper.cpp
         run: |
@@ -42,29 +42,42 @@ jobs:
         run: |
           test -f app/src/main/cpp/whisper.cpp/CMakeLists.txt
           test -f app/src/main/cpp/whisper.cpp/ggml/CMakeLists.txt
-          echo "WHISPER.CPP SOURCE IS READY!"
 
       - name: Check AndroidManifest XML
         run: |
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
-
-          file = "app/src/main/AndroidManifest.xml"
-
-          try:
-              ET.parse(file)
-              print("MANIFEST XML IS VALID!")
-          except ET.ParseError as error:
-              print("MANIFEST ERROR FOUND!")
-              print("Details:", error)
-              raise
+          ET.parse("app/src/main/AndroidManifest.xml")
+          print("MANIFEST XML IS VALID!")
           PY
 
       - name: Build Android APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Sign APK with permanent key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > kisoti-release.jks
+
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+            --ks kisoti-release.jks \
+            --ks-key-alias kisoti \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEYSTORE_PASSWORD \
+            --out app/build/outputs/apk/debug/Kisoti-Hear.apk \
+            app/build/outputs/apk/debug/app-debug.apk
+
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify \
+            app/build/outputs/apk/debug/Kisoti-Hear.apk
+
+          rm -f kisoti-release.jks
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: Kisoti-Hear-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Kisoti-Hear-Signed-APK
+          path: app/build/outputs/apk/debug/Kisoti-Hear.apk
