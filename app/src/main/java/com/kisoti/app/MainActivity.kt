@@ -397,6 +397,8 @@ class MainActivity : Activity() {
                     )
                 }
             }
+
+            Unit
         }
 
         snapshot?.let {
