@@ -70,6 +70,8 @@ class MainActivity : Activity() {
     @Volatile
     private var busyToastShown = false
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private val diagnosticRunnable = object : Runnable {
 
         override fun run() {
@@ -119,8 +121,6 @@ class MainActivity : Activity() {
             mainHandler.postDelayed(this, 1000)
         }
     }
-
-    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -608,32 +608,32 @@ class MainActivity : Activity() {
 
         audioEngine.stop()
 
-        var remainingAudio: ShortArray? = null
+        val remainingAudio: ShortArray? =
+            synchronized(audioLock) {
 
-        synchronized(audioLock) {
+                val available =
+                    minOf(ringSamplesAvailable, windowSize)
 
-            val available =
-                minOf(ringSamplesAvailable, windowSize)
+                if (available >= sampleRate) {
 
-            if (available >= sampleRate) {
+                    val startPosition =
+                        (ringWritePosition - available + windowSize) %
+                                windowSize
 
-                val startPosition =
-                    (ringWritePosition - available + windowSize) %
-                            windowSize
+                    ShortArray(available) { index ->
 
-                remainingAudio = ShortArray(available) { index ->
+                        audioRingBuffer[
+                            (startPosition + index) % windowSize
+                        ]
+                    }
 
-                    audioRingBuffer[
-                        (startPosition + index) % windowSize
-                    ]
+                } else {
+                    null
                 }
             }
 
-            Unit
-        }
-
-        remainingAudio?.let {
-            sendToWhisper(it)
+        if (remainingAudio != null) {
+            sendToWhisper(remainingAudio)
         }
 
         statusText.text =
