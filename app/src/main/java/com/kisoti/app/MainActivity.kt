@@ -29,8 +29,6 @@ class MainActivity : Activity() {
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
 
-    private val mainHandler = Handler(Looper.getMainLooper())
-
     @Volatile
     private var modelReady = false
 
@@ -95,14 +93,14 @@ class MainActivity : Activity() {
 
                     2 -> {
                         "WHISPER HATUA 2: Bado inachakata sauti...\n" +
-                        "Sampuli: $samples"
+                                "Sampuli: $samples"
                     }
 
                     3 -> {
                         "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
-                        "Result: $result\n" +
-                        "Sampuli: $samples\n" +
-                        "Segments: $segments"
+                                "Result: $result\n" +
+                                "Sampuli: $samples\n" +
+                                "Segments: $segments"
                     }
 
                     else -> {
@@ -121,6 +119,8 @@ class MainActivity : Activity() {
             mainHandler.postDelayed(this, 1000)
         }
     }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -628,6 +628,8 @@ class MainActivity : Activity() {
                     ]
                 }
             }
+
+            Unit
         }
 
         remainingAudio?.let {
