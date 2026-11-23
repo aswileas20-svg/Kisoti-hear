@@ -25,18 +25,49 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Locate Android SDK Manager
+        run: |
+          set -e
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager haijapatikana"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "Android SDK Manager imepatikana."
+
+      - name: Accept Android licenses
+        run: |
+          yes | "$SDKMANAGER" --licenses || true
+
+      - name: Install Android NDK and CMake
+        run: |
+          "$SDKMANAGER" --install \
+            "ndk;25.2.9519653" \
+            "cmake;3.22.1" \
+            "build-tools;34.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.4'
 
-      - name: Set up Android NDK and CMake
-        run: |
-          sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1" "build-tools;34.0.0"
-
       - name: Download Whisper.cpp
         run: |
-          git clone --branch v1.9.5 --depth 1 --recurse-submodules --shallow-submodules https://github.com/ggml-org/whisper.cpp.git app/src/main/cpp/whisper.cpp
+          git clone \
+            --branch v1.9.5 \
+            --depth 1 \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/ggml-org/whisper.cpp.git \
+            app/src/main/cpp/whisper.cpp
 
       - name: Verify Whisper.cpp
         run: |
@@ -52,7 +83,8 @@ jobs:
           PY
 
       - name: Build Android APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          gradle assembleDebug --stacktrace
 
       - name: Sign APK with permanent key
         env:
@@ -61,7 +93,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          test -n "$KEYSTORE_BASE64"
+          test -n "$KEYSTORE_PASSWORD"
+
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > kisoti-release.jks
+
+          test -s kisoti-release.jks
 
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
             --ks kisoti-release.jks \
@@ -81,3 +118,4 @@ jobs:
         with:
           name: Kisoti-Hear-Signed-APK
           path: app/build/outputs/apk/debug/Kisoti-Hear.apk
+          retention-days: 7
