@@ -7,19 +7,18 @@ import android.os.Handler
 import android.os.Looper
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Log
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import android.util.Log
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
     private val sampleRate = 16000
-
     private val windowSize = sampleRate * 5
     private val updateInterval = sampleRate
 
@@ -40,13 +39,12 @@ class MainActivity : Activity() {
         Executors.newSingleThreadExecutor()
 
     private val pendingLock = Any()
+    private val audioLock = Any()
+    private val timingLock = Any()
 
     private var pendingAudio: ShortArray? = null
     private var workerRunning = false
-
     private var processingSession = -1
-
-    private val audioLock = Any()
 
     private val audioRingBuffer = ShortArray(windowSize)
 
@@ -56,10 +54,8 @@ class MainActivity : Activity() {
 
     private var previousWindowWords: List<String> = emptyList()
     private var inferenceResultCount = 0
-
     private var hasTranscript = false
 
-    // Timing diagnostics
     private var inferenceTimingCount = 0
     private var totalInferenceTimeMs = 0L
     private var lastInferenceTimeMs = 0L
@@ -97,34 +93,38 @@ class MainActivity : Activity() {
                 val samples = whisperBridge.getLastSamples()
                 val segments = whisperBridge.getLastSegments()
 
-                val averageTime = synchronized(this@MainActivity) {
-                    if (inferenceTimingCount > 0) {
+                val timingData = synchronized(timingLock) {
+                    val average = if (inferenceTimingCount > 0) {
                         totalInferenceTimeMs / inferenceTimingCount
                     } else {
                         0L
                     }
+
+                    Pair(lastInferenceTimeMs, average)
                 }
 
                 val message = when (stage) {
 
                     2 -> {
                         "WHISPER HATUA 2: Bado inachakata sauti...\n" +
-                        "Sampuli: $samples\n" +
-                        "Muda wa mwisho: ${lastInferenceTimeMs} ms"
+                                "Sampuli: $samples\n" +
+                                "Muda wa mwisho: ${timingData.first} ms\n" +
+                                "Wastani: ${timingData.second} ms"
                     }
 
                     3 -> {
                         "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
-                        "Result: $result\n" +
-                        "Sampuli: $samples\n" +
-                        "Segments: $segments\n" +
-                        "Muda wa mwisho: ${lastInferenceTimeMs} ms\n" +
-                        "Wastani: ${averageTime} ms"
+                                "Result: $result\n" +
+                                "Sampuli: $samples\n" +
+                                "Segments: $segments\n" +
+                                "Muda wa mwisho: ${timingData.first} ms\n" +
+                                "Wastani: ${timingData.second} ms"
                     }
 
                     else -> {
                         "Whisper inajiandaa kuchakata sauti...\n" +
-                        "Muda wa mwisho: ${lastInferenceTimeMs} ms"
+                                "Muda wa mwisho: ${timingData.first} ms\n" +
+                                "Wastani: ${timingData.second} ms"
                     }
                 }
 
@@ -333,7 +333,7 @@ class MainActivity : Activity() {
             samplesSinceLastInference = 0
         }
 
-        synchronized(this) {
+        synchronized(timingLock) {
             inferenceTimingCount = 0
             totalInferenceTimeMs = 0L
             lastInferenceTimeMs = 0L
@@ -511,36 +511,47 @@ class MainActivity : Activity() {
                     )
                 }
 
-                // START TIMING
-                val inferenceStart =
-                    System.nanoTime()
+                val inferenceStart = System.nanoTime()
 
                 val result =
                     whisperBridge.transcribe(audioData).trim()
 
-                // END TIMING
-                val inferenceEnd =
-                    System.nanoTime()
+                val inferenceEnd = System.nanoTime()
 
                 val elapsedMs =
                     (inferenceEnd - inferenceStart) / 1_000_000L
 
-                synchronized(this) {
+                val timingData = synchronized(timingLock) {
+
                     lastInferenceTimeMs = elapsedMs
                     totalInferenceTimeMs += elapsedMs
                     inferenceTimingCount++
-                }
 
-                val averageMs = synchronized(this) {
-                    totalInferenceTimeMs / inferenceTimingCount
+                    val averageMs = if (inferenceTimingCount > 0) {
+                        totalInferenceTimeMs / inferenceTimingCount
+                    } else {
+                        0L
+                    }
+
+                    Pair(inferenceTimingCount, averageMs)
                 }
 
                 Log.i(
                     "KISOTI_TIMING",
-                    "Inference #$inferenceTimingCount: " +
-                    "$elapsedMs ms, Average: $averageMs ms, " +
-                    "Audio: ${audioData.size} samples"
+                    "Inference #${timingData.first}: " +
+                            "$elapsedMs ms, " +
+                            "Average: ${timingData.second} ms, " +
+                            "Audio: ${audioData.size} samples"
                 )
+
+                runOnUiThread {
+                    if (jobSession == currentSession) {
+                        statusText.text =
+                            "Whisper imechakata sauti.\n" +
+                                    "Muda wa mwisho: $elapsedMs ms\n" +
+                                    "Wastani: ${timingData.second} ms"
+                    }
+                }
 
                 inferenceResultCount++
 
