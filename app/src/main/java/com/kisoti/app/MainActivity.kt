@@ -19,6 +19,7 @@ class MainActivity : Activity() {
 
     private val microphoneRequestCode = 100
     private val sampleRate = 16000
+
     private val windowSize = sampleRate * 5
     private val updateInterval = sampleRate
 
@@ -39,12 +40,13 @@ class MainActivity : Activity() {
         Executors.newSingleThreadExecutor()
 
     private val pendingLock = Any()
-    private val audioLock = Any()
-    private val timingLock = Any()
 
     private var pendingAudio: ShortArray? = null
     private var workerRunning = false
+
     private var processingSession = -1
+
+    private val audioLock = Any()
 
     private val audioRingBuffer = ShortArray(windowSize)
 
@@ -54,7 +56,10 @@ class MainActivity : Activity() {
 
     private var previousWindowWords: List<String> = emptyList()
     private var inferenceResultCount = 0
+
     private var hasTranscript = false
+
+    private val timingLock = Any()
 
     private var inferenceTimingCount = 0
     private var totalInferenceTimeMs = 0L
@@ -421,6 +426,8 @@ class MainActivity : Activity() {
                     )
                 }
             }
+
+            Unit
         }
 
         snapshot?.let {
@@ -469,6 +476,8 @@ class MainActivity : Activity() {
                         "Whisper inachakata. Sauti mpya imehifadhiwa."
                     )
                 }
+
+                Unit
             }
         }
     }
@@ -477,23 +486,39 @@ class MainActivity : Activity() {
 
         while (true) {
 
-            val audioData: ShortArray
-            val jobSession: Int
-
-            synchronized(pendingLock) {
+            /*
+             * Marekebisho ya kosa la Kotlin:
+             * Kila tawi la if lina thamani.
+             * Hakuna return ndani ya synchronized lambda.
+             */
+            val job = synchronized(pendingLock) {
 
                 val nextAudio = pendingAudio
 
                 if (nextAudio == null) {
+
                     workerRunning = false
                     busyToastShown = false
-                    return
-                }
 
-                audioData = nextAudio
-                pendingAudio = null
-                jobSession = currentSession
+                    null
+
+                } else {
+
+                    pendingAudio = null
+
+                    Pair(
+                        nextAudio,
+                        currentSession
+                    )
+                }
             }
+
+            if (job == null) {
+                return
+            }
+
+            val audioData = job.first
+            val jobSession = job.second
 
             try {
 
