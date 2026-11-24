@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.util.Log
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -58,6 +59,11 @@ class MainActivity : Activity() {
 
     private var hasTranscript = false
 
+    // Timing diagnostics
+    private var inferenceTimingCount = 0
+    private var totalInferenceTimeMs = 0L
+    private var lastInferenceTimeMs = 0L
+
     @Volatile
     private var firstAudioToastShown = false
 
@@ -91,22 +97,34 @@ class MainActivity : Activity() {
                 val samples = whisperBridge.getLastSamples()
                 val segments = whisperBridge.getLastSegments()
 
+                val averageTime = synchronized(this@MainActivity) {
+                    if (inferenceTimingCount > 0) {
+                        totalInferenceTimeMs / inferenceTimingCount
+                    } else {
+                        0L
+                    }
+                }
+
                 val message = when (stage) {
 
                     2 -> {
                         "WHISPER HATUA 2: Bado inachakata sauti...\n" +
-                                "Sampuli: $samples"
+                        "Sampuli: $samples\n" +
+                        "Muda wa mwisho: ${lastInferenceTimeMs} ms"
                     }
 
                     3 -> {
                         "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
-                                "Result: $result\n" +
-                                "Sampuli: $samples\n" +
-                                "Segments: $segments"
+                        "Result: $result\n" +
+                        "Sampuli: $samples\n" +
+                        "Segments: $segments\n" +
+                        "Muda wa mwisho: ${lastInferenceTimeMs} ms\n" +
+                        "Wastani: ${averageTime} ms"
                     }
 
                     else -> {
-                        "Whisper inajiandaa kuchakata sauti..."
+                        "Whisper inajiandaa kuchakata sauti...\n" +
+                        "Muda wa mwisho: ${lastInferenceTimeMs} ms"
                     }
                 }
 
@@ -315,6 +333,12 @@ class MainActivity : Activity() {
             samplesSinceLastInference = 0
         }
 
+        synchronized(this) {
+            inferenceTimingCount = 0
+            totalInferenceTimeMs = 0L
+            lastInferenceTimeMs = 0L
+        }
+
         firstAudioToastShown = false
         firstWindowToastShown = false
         firstInferenceStarted = false
@@ -397,8 +421,6 @@ class MainActivity : Activity() {
                     )
                 }
             }
-
-            Unit
         }
 
         snapshot?.let {
@@ -447,8 +469,6 @@ class MainActivity : Activity() {
                         "Whisper inachakata. Sauti mpya imehifadhiwa."
                     )
                 }
-
-                Unit
             }
         }
     }
@@ -491,8 +511,36 @@ class MainActivity : Activity() {
                     )
                 }
 
+                // START TIMING
+                val inferenceStart =
+                    System.nanoTime()
+
                 val result =
                     whisperBridge.transcribe(audioData).trim()
+
+                // END TIMING
+                val inferenceEnd =
+                    System.nanoTime()
+
+                val elapsedMs =
+                    (inferenceEnd - inferenceStart) / 1_000_000L
+
+                synchronized(this) {
+                    lastInferenceTimeMs = elapsedMs
+                    totalInferenceTimeMs += elapsedMs
+                    inferenceTimingCount++
+                }
+
+                val averageMs = synchronized(this) {
+                    totalInferenceTimeMs / inferenceTimingCount
+                }
+
+                Log.i(
+                    "KISOTI_TIMING",
+                    "Inference #$inferenceTimingCount: " +
+                    "$elapsedMs ms, Average: $averageMs ms, " +
+                    "Audio: ${audioData.size} samples"
+                )
 
                 inferenceResultCount++
 
