@@ -5,32 +5,19 @@
 #include <cstdint>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <android/log.h>
 #include "whisper.h"
 
 #define LOG_TAG "KISOTI_WHISPER"
 
-#define LOGI(...) \
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-
-#define LOGE(...) \
-    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 static std::atomic<int> g_inference_stage{0};
 static std::atomic<int> g_last_result{-999};
 static std::atomic<int> g_last_samples{0};
 static std::atomic<int> g_last_segments{0};
-
-
-// =====================================================
-// JNI INITIALIZATION
-// =====================================================
-
-extern "C"
-JNIEXPORT jint JNICALL
-JNI_OnLoad(JavaVM* vm, void* reserved) {
-    return JNI_VERSION_1_6;
-}
 
 
 // =====================================================
@@ -64,7 +51,7 @@ Java_com_kisoti_app_WhisperBridge_nativeInit(
 
     LOGI("Model inaanza kupakiwa");
 
-    auto* context =
+    whisper_context* context =
             whisper_init_from_file_with_params(path, params);
 
     env->ReleaseStringUTFChars(modelPath, path);
@@ -91,7 +78,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
         jlong contextPointer,
         jshortArray audioData) {
 
-    auto* context =
+    whisper_context* context =
             reinterpret_cast<whisper_context*>(contextPointer);
 
     if (context == nullptr || audioData == nullptr) {
@@ -102,7 +89,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     jsize length = env->GetArrayLength(audioData);
 
-    if (length == 0) {
+    if (length <= 0) {
         LOGE("Audio haina samples");
         g_inference_stage = 0;
         return env->NewStringUTF("");
@@ -129,9 +116,8 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
         samples[i] = value;
 
-        float absolute_value = value < 0
-                ? -value
-                : value;
+        float absolute_value =
+                std::fabs(value);
 
         if (absolute_value > max_amplitude) {
             max_amplitude = absolute_value;
@@ -147,11 +133,9 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
             JNI_ABORT
     );
 
-    double rms = 0.0;
-
-    if (length > 0) {
-        rms = std::sqrt(sum_squares / length);
-    }
+    double rms = std::sqrt(
+            sum_squares / static_cast<double>(length)
+    );
 
     g_last_samples = static_cast<int>(length);
     g_last_segments = 0;
@@ -328,14 +312,11 @@ Java_com_kisoti_app_WhisperBridge_nativeFree(
         jobject thiz,
         jlong contextPointer) {
 
-    auto* context =
+    whisper_context* context =
             reinterpret_cast<whisper_context*>(contextPointer);
 
     if (context != nullptr) {
-
         whisper_free(context);
-
         LOGI("Model imefungwa");
-
     }
 }
