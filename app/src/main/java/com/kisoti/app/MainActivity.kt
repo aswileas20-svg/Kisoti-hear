@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.Looper
 import android.Manifest
 import android.content.pm.PackageManager
-import android.util.Log
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
@@ -59,12 +58,6 @@ class MainActivity : Activity() {
 
     private var hasTranscript = false
 
-    private val timingLock = Any()
-
-    private var inferenceTimingCount = 0
-    private var totalInferenceTimeMs = 0L
-    private var lastInferenceTimeMs = 0L
-
     @Volatile
     private var firstAudioToastShown = false
 
@@ -98,38 +91,22 @@ class MainActivity : Activity() {
                 val samples = whisperBridge.getLastSamples()
                 val segments = whisperBridge.getLastSegments()
 
-                val timingData = synchronized(timingLock) {
-                    val average = if (inferenceTimingCount > 0) {
-                        totalInferenceTimeMs / inferenceTimingCount
-                    } else {
-                        0L
-                    }
-
-                    Pair(lastInferenceTimeMs, average)
-                }
-
                 val message = when (stage) {
 
                     2 -> {
                         "WHISPER HATUA 2: Bado inachakata sauti...\n" +
-                                "Sampuli: $samples\n" +
-                                "Muda wa mwisho: ${timingData.first} ms\n" +
-                                "Wastani: ${timingData.second} ms"
+                                "Sampuli: $samples"
                     }
 
                     3 -> {
                         "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
                                 "Result: $result\n" +
                                 "Sampuli: $samples\n" +
-                                "Segments: $segments\n" +
-                                "Muda wa mwisho: ${timingData.first} ms\n" +
-                                "Wastani: ${timingData.second} ms"
+                                "Segments: $segments"
                     }
 
                     else -> {
-                        "Whisper inajiandaa kuchakata sauti...\n" +
-                                "Muda wa mwisho: ${timingData.first} ms\n" +
-                                "Wastani: ${timingData.second} ms"
+                        "Whisper inajiandaa kuchakata sauti..."
                     }
                 }
 
@@ -338,12 +315,6 @@ class MainActivity : Activity() {
             samplesSinceLastInference = 0
         }
 
-        synchronized(timingLock) {
-            inferenceTimingCount = 0
-            totalInferenceTimeMs = 0L
-            lastInferenceTimeMs = 0L
-        }
-
         firstAudioToastShown = false
         firstWindowToastShown = false
         firstInferenceStarted = false
@@ -486,11 +457,6 @@ class MainActivity : Activity() {
 
         while (true) {
 
-            /*
-             * Marekebisho ya kosa la Kotlin:
-             * Kila tawi la if lina thamani.
-             * Hakuna return ndani ya synchronized lambda.
-             */
             val job = synchronized(pendingLock) {
 
                 val nextAudio = pendingAudio
@@ -536,47 +502,8 @@ class MainActivity : Activity() {
                     )
                 }
 
-                val inferenceStart = System.nanoTime()
-
                 val result =
                     whisperBridge.transcribe(audioData).trim()
-
-                val inferenceEnd = System.nanoTime()
-
-                val elapsedMs =
-                    (inferenceEnd - inferenceStart) / 1_000_000L
-
-                val timingData = synchronized(timingLock) {
-
-                    lastInferenceTimeMs = elapsedMs
-                    totalInferenceTimeMs += elapsedMs
-                    inferenceTimingCount++
-
-                    val averageMs = if (inferenceTimingCount > 0) {
-                        totalInferenceTimeMs / inferenceTimingCount
-                    } else {
-                        0L
-                    }
-
-                    Pair(inferenceTimingCount, averageMs)
-                }
-
-                Log.i(
-                    "KISOTI_TIMING",
-                    "Inference #${timingData.first}: " +
-                            "$elapsedMs ms, " +
-                            "Average: ${timingData.second} ms, " +
-                            "Audio: ${audioData.size} samples"
-                )
-
-                runOnUiThread {
-                    if (jobSession == currentSession) {
-                        statusText.text =
-                            "Whisper imechakata sauti.\n" +
-                                    "Muda wa mwisho: $elapsedMs ms\n" +
-                                    "Wastani: ${timingData.second} ms"
-                    }
-                }
 
                 inferenceResultCount++
 
