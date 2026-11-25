@@ -520,6 +520,10 @@ class MainActivity : Activity() {
                         "Whisper inachakata sauti mpya."
                     )
                 }
+
+                // Muhimu: synchronized block inarudisha Unit,
+                // badala ya kutumia if isiyo na else kama expression.
+                Unit
             }
         }
     }
