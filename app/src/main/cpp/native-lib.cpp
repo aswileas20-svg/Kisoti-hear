@@ -147,7 +147,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
             );
 
     // Jaribio: punguza threads kutoka 4 hadi 2
-    params.n_threads = 2;
+    params.n_threads = 4;
 
     // Whisper itambue lugha yenyewe na iendelee kuandika transcript
     params.language = "auto";
