@@ -58,9 +58,10 @@ Java_com_kisoti_app_WhisperBridge_nativeInit(
 
     if (context == nullptr) {
         LOGE("Model imeshindwa kupakiwa");
-    } else {
-        LOGI("Model imepakiwa");
+        return 0;
     }
+
+    LOGI("Model imepakiwa");
 
     return reinterpret_cast<jlong>(context);
 }
@@ -83,7 +84,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     if (context == nullptr || audioData == nullptr) {
         LOGE("Context au audioData ni tupu");
-        g_inference_stage = 0;
+        g_inference_stage.store(0);
         return env->NewStringUTF("");
     }
 
@@ -91,7 +92,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     if (length <= 0) {
         LOGE("Audio haina samples");
-        g_inference_stage = 0;
+        g_inference_stage.store(0);
         return env->NewStringUTF("");
     }
 
@@ -100,7 +101,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     if (audio == nullptr) {
         LOGE("Imeshindwa kupata audio samples");
-        g_inference_stage = 0;
+        g_inference_stage.store(0);
         return env->NewStringUTF("");
     }
 
@@ -137,33 +138,42 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
             sum_squares / static_cast<double>(length)
     );
 
-    g_last_samples = static_cast<int>(length);
-    g_last_segments = 0;
-    g_last_result = -999;
+    g_last_samples.store(static_cast<int>(length));
+    g_last_segments.store(0);
+    g_last_result.store(-999);
 
     whisper_full_params params =
             whisper_full_default_params(
                     WHISPER_SAMPLING_GREEDY
             );
 
-    // Jaribio: punguza threads kutoka 4 hadi 2
+    // Idadi ya threads zinazotumika kwenye CPU.
     params.n_threads = 4;
 
-    // Whisper itambue lugha yenyewe na iendelee kuandika transcript
-    params.language = "sw";
+    // Ruhusu Whisper itambue Kiswahili au Kiingereza.
+    params.language = "auto";
 
-    // Muhimu: true husababisha detect-only mode kwenye v1.9.5
+    // False: endelea na transcription baada ya kutambua lugha.
+    // True ingetumika kwa detect-only mode.
     params.detect_language = false;
 
+    // Kila window ijitegemee kwa sababu audio ina overlap.
     params.no_context = true;
+
+    // Hatuhitaji timestamps kwenye maandishi ya sasa.
     params.no_timestamps = true;
+
+    // Rudisha transcript kama segment moja.
     params.single_segment = true;
+
     params.max_tokens = 0;
+
     params.print_progress = false;
     params.print_realtime = false;
     params.print_timestamps = false;
 
     LOGI("DIAG: Maandalizi yamekamilika");
+
     LOGI("DIAG: Audio samples = %d",
          static_cast<int>(length));
 
@@ -181,7 +191,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     LOGI("DIAG: Language mode = AUTO");
 
-    g_inference_stage = 2;
+    g_inference_stage.store(2);
 
     LOGI("DIAG: WHISPER_FULL_STARTED");
 
@@ -203,7 +213,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
                     end_time - start_time
             ).count();
 
-    g_last_result = result;
+    g_last_result.store(result);
 
     LOGI("DIAG: WHISPER_FULL_RETURNED");
 
@@ -218,12 +228,11 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
         LOGE("Whisper inference imerudisha error: %d",
              result);
 
-        g_inference_stage = 3;
+        g_inference_stage.store(3);
 
         return env->NewStringUTF("");
     }
 
-    // Pata lugha iliyotambuliwa na Whisper
     int detected_lang_id =
             whisper_full_lang_id(context);
 
@@ -242,7 +251,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
     int segments =
             whisper_full_n_segments(context);
 
-    g_last_segments = segments;
+    g_last_segments.store(segments);
 
     for (int i = 0; i < segments; i++) {
 
@@ -261,7 +270,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     LOGI("DIAG: Uchambuzi umekamilika");
 
-    g_inference_stage = 3;
+    g_inference_stage.store(3);
 
     return env->NewStringUTF(transcript.c_str());
 }
