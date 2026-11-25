@@ -35,6 +35,7 @@ class WhisperBridge {
         }
 
         nativeContext = nativeInit(modelPath)
+
         return nativeContext != 0L
     }
 
@@ -44,21 +45,28 @@ class WhisperBridge {
             return ""
         }
 
-        return nativeTranscribe(nativeContext, audioData)
+        return nativeTranscribe(
+            nativeContext,
+            audioData
+        )
     }
 
+    @Synchronized
     fun getNativeStage(): Int {
         return nativeGetStage()
     }
 
+    @Synchronized
     fun getLastResult(): Int {
         return nativeGetLastResult()
     }
 
+    @Synchronized
     fun getLastSamples(): Int {
         return nativeGetLastSamples()
     }
 
+    @Synchronized
     fun getLastSegments(): Int {
         return nativeGetLastSegments()
     }
@@ -71,6 +79,7 @@ class WhisperBridge {
         }
     }
 
+    @Synchronized
     fun isModelLoaded(): Boolean {
         return nativeContext != 0L
     }
