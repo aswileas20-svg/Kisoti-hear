@@ -146,9 +146,15 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
                     WHISPER_SAMPLING_GREEDY
             );
 
-    params.n_threads = 4;
+    // Jaribio: punguza threads kutoka 4 hadi 2
+    params.n_threads = 2;
+
+    // Whisper itambue lugha yenyewe na iendelee kuandika transcript
     params.language = "auto";
+
+    // Muhimu: true husababisha detect-only mode kwenye v1.9.5
     params.detect_language = false;
+
     params.no_context = true;
     params.no_timestamps = true;
     params.single_segment = true;
@@ -172,6 +178,8 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
 
     LOGI("DIAG: Whisper threads = %d",
          params.n_threads);
+
+    LOGI("DIAG: Language mode = AUTO");
 
     g_inference_stage = 2;
 
@@ -213,6 +221,20 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
         g_inference_stage = 3;
 
         return env->NewStringUTF("");
+    }
+
+    // Pata lugha iliyotambuliwa na Whisper
+    int detected_lang_id =
+            whisper_full_lang_id(context);
+
+    const char* detected_language =
+            whisper_lang_str(detected_lang_id);
+
+    if (detected_language != nullptr) {
+        LOGI("DIAG: Detected language = %s",
+             detected_language);
+    } else {
+        LOGE("DIAG: Lugha iliyotambuliwa haijapatikana");
     }
 
     std::string transcript;
