@@ -150,7 +150,7 @@ Java_com_kisoti_app_WhisperBridge_nativeTranscribe(
     params.n_threads = 4;
 
     // Whisper itambue lugha yenyewe na iendelee kuandika transcript
-    params.language = "auto";
+    params.language = "sw";
 
     // Muhimu: true husababisha detect-only mode kwenye v1.9.5
     params.detect_language = false;
