@@ -1,5 +1,4 @@
 
-
 package com.kisoti.app
 
 import android.Manifest
@@ -19,7 +18,14 @@ class AudioEngine(
         fun onError(message: String)
     }
 
-    private val sampleRate = 16000
+    companion object {
+        private const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+
+        // 1024 samples = 64 milliseconds at 16 kHz.
+        private const val READ_BUFFER_SIZE = 1024
+    }
 
     @Volatile
     private var isRecording = false
@@ -32,39 +38,64 @@ class AudioEngine(
 
         if (isRecording) return true
 
+        // Clean up any previous recording session.
+        if (audioRecord != null || recordingThread != null) {
+            stop()
+        }
+
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            listener.onError("Ruhusa ya microphone haijatolewa")
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            reportError("Ruhusa ya microphone haijatolewa")
             return false
         }
 
         val minBufferSize = AudioRecord.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+            SAMPLE_RATE,
+            CHANNEL_CONFIG,
+            AUDIO_FORMAT
         )
 
         if (minBufferSize <= 0) {
-            listener.onError("Imeshindwa kuandaa microphone")
+            reportError("Imeshindwa kuandaa microphone: $minBufferSize")
             return false
         }
 
         val recorder = try {
             AudioRecord(
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBufferSize * 2
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                maxOf(minBufferSize * 2, 4096)
             )
         } catch (e: Exception) {
-            listener.onError("Tatizo la microphone: ${e.message}")
+            reportError("Tatizo la microphone: ${e.message}")
             return false
         }
 
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             recorder.release()
-            listener.onError("Microphone haikuweza kuanzishwa")
+            reportError("Microphone haikuweza kuanzishwa")
+            return false
+        }
+
+        try {
+            recorder.startRecording()
+
+            if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                recorder.release()
+                reportError("Microphone haikuanza kurekodi")
+                return false
+            }
+
+        } catch (e: Exception) {
+            try {
+                recorder.release()
+            } catch (_: Exception) {
+            }
+
+            reportError("Imeshindwa kuanza kurekodi: ${e.message}")
             return false
         }
 
@@ -72,66 +103,122 @@ class AudioEngine(
         isRecording = true
 
         try {
-            recorder.startRecording()
+            recordingThread = Thread {
+                captureAudio(recorder)
+            }.apply {
+                name = "Kisoti-AudioEngine"
+                start()
+            }
+
         } catch (e: Exception) {
             isRecording = false
+
+            try {
+                recorder.stop()
+            } catch (_: Exception) {
+            }
+
             recorder.release()
             audioRecord = null
-            listener.onError("Imeshindwa kuanza kurekodi: ${e.message}")
+            recordingThread = null
+
+            reportError("Imeshindwa kuanzisha recording thread: ${e.message}")
             return false
         }
 
-        recordingThread = Thread {
-            val buffer = ShortArray(
-                maxOf(minBufferSize / 2, 2048)
-            )
+        return true
+    }
+
+    private fun captureAudio(recorder: AudioRecord) {
+
+        val buffer = ShortArray(READ_BUFFER_SIZE)
+
+        try {
 
             while (isRecording) {
+
                 val length = recorder.read(
                     buffer,
                     0,
                     buffer.size
                 )
 
-                if (length > 0) {
-                    listener.onAudioData(
-                        buffer.copyOf(length),
-                        length
-                    )
-                } else if (length < 0) {
-                    listener.onError("Hitilafu ya kusoma sauti: $length")
-                    break
+                when {
+                    length > 0 -> {
+
+                        if (!isRecording) break
+
+                        // Send an independent copy to the listener.
+                        // The listener must return quickly so audio
+                        // capture is not blocked by Whisper processing.
+                        val audioData = buffer.copyOf(length)
+
+                        try {
+                            listener.onAudioData(audioData, length)
+                        } catch (e: Exception) {
+                            reportError(
+                                "Hitilafu wakati wa kupokea sauti: ${e.message}"
+                            )
+                            break
+                        }
+                    }
+
+                    length == 0 -> {
+                        Thread.yield()
+                    }
+
+                    else -> {
+                        if (isRecording) {
+                            reportError(
+                                "Hitilafu ya kusoma sauti: $length"
+                            )
+                        }
+                        break
+                    }
                 }
             }
-        }.apply {
-            name = "Kisoti-AudioEngine"
-            start()
-        }
 
-        return true
+        } catch (e: Exception) {
+            if (isRecording) {
+                reportError("Audio capture error: ${e.message}")
+            }
+
+        } finally {
+            isRecording = false
+        }
     }
 
     @Synchronized
     fun stop() {
+
         isRecording = false
 
         val recorder = audioRecord
+        val thread = recordingThread
 
+        // Stop AudioRecord first to unblock a pending read().
         try {
             if (recorder != null &&
-                recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING
+            ) {
                 recorder.stop()
             }
         } catch (_: Exception) {
         }
 
-        try {
-            recordingThread?.join(500)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+        // Wait for the recording thread to finish.
+        if (thread != null && thread !== Thread.currentThread()) {
+            try {
+                thread.join(1000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
 
-        recorder?.release()
+        try {
+            recorder?.release()
+        } catch (_: Exception) {
+        }
 
         audioRecord = null
         recordingThread = null
@@ -139,5 +226,13 @@ class AudioEngine(
 
     fun isRunning(): Boolean {
         return isRecording
+    }
+
+    private fun reportError(message: String) {
+        try {
+            listener.onError(message)
+        } catch (_: Exception) {
+            // Prevent listener errors from crashing audio capture.
+        }
     }
 }
