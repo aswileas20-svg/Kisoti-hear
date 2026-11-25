@@ -5,6 +5,7 @@ import android.app.Activity
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.Manifest
 import android.content.pm.PackageManager
 import android.view.Gravity
@@ -16,11 +17,17 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
-    private val microphoneRequestCode = 100
-    private val sampleRate = 16000
+    private companion object {
+        const val MICROPHONE_REQUEST_CODE = 100
+        const val SAMPLE_RATE = 16000
 
-    private val windowSize = sampleRate * 5
-    private val updateInterval = sampleRate
+        // Keep the existing 5-second sliding window for initial testing.
+        const val WINDOW_SECONDS = 5
+        const val UPDATE_SECONDS = 1
+    }
+
+    private val windowSize = SAMPLE_RATE * WINDOW_SECONDS
+    private val updateInterval = SAMPLE_RATE * UPDATE_SECONDS
 
     private lateinit var whisperBridge: WhisperBridge
     private lateinit var transcriptText: TextView
@@ -38,13 +45,21 @@ class MainActivity : Activity() {
     private val transcriptionExecutor =
         Executors.newSingleThreadExecutor()
 
+    private data class PendingAudio(
+        val samples: ShortArray,
+        val sessionId: Int,
+        val capturedAtMs: Long
+    )
+
     private val pendingLock = Any()
 
-    private var pendingAudio: ShortArray? = null
+    private var pendingAudio: PendingAudio? = null
+
     private var workerRunning = false
 
     private var processingSession = -1
 
+    // Audio sliding window.
     private val audioLock = Any()
 
     private val audioRingBuffer = ShortArray(windowSize)
@@ -53,10 +68,21 @@ class MainActivity : Activity() {
     private var ringSamplesAvailable = 0
     private var samplesSinceLastInference = 0
 
+    // Transcript overlap management.
     private var previousWindowWords: List<String> = emptyList()
     private var inferenceResultCount = 0
 
     private var hasTranscript = false
+
+    // Diagnostic information.
+    @Volatile
+    private var lastInferenceDurationMs = 0L
+
+    @Volatile
+    private var lastQueueDelayMs = 0L
+
+    @Volatile
+    private var droppedWindowCount = 0
 
     @Volatile
     private var firstAudioToastShown = false
@@ -94,23 +120,26 @@ class MainActivity : Activity() {
                 val message = when (stage) {
 
                     2 -> {
-                        "WHISPER HATUA 2: Bado inachakata sauti...\n" +
-                                "Sampuli: $samples"
+                        "WHISPER: Inachakata sauti...\n"
                     }
 
                     3 -> {
-                        "WHISPER HATUA 3: Uchakataji umekamilika.\n" +
-                                "Result: $result\n" +
-                                "Sampuli: $samples\n" +
-                                "Segments: $segments"
+                        "WHISPER: Uchakataji umekamilika.\n"
                     }
 
                     else -> {
-                        "Whisper inajiandaa kuchakata sauti..."
+                        "Whisper inajiandaa..."
                     }
                 }
 
-                statusText.text = message
+                statusText.text =
+                    message +
+                    "Muda wa uchakataji: ${lastInferenceDurationMs} ms\n" +
+                    "Muda wa kusubiri: ${lastQueueDelayMs} ms\n" +
+                    "Madirisha yaliyopitwa: $droppedWindowCount\n" +
+                    "Sampuli: $samples\n" +
+                    "Segments: $segments\n" +
+                    "Matokeo: $result"
 
             } catch (e: Exception) {
 
@@ -152,7 +181,9 @@ class MainActivity : Activity() {
     }
 
     private fun showToast(message: String) {
+
         runOnUiThread {
+
             Toast.makeText(
                 applicationContext,
                 message,
@@ -171,6 +202,7 @@ class MainActivity : Activity() {
             object : WhisperModelManager.Listener {
 
                 override fun onProgress(percent: Int) {
+
                     runOnUiThread {
                         statusText.text =
                             "Inapakua Whisper Model: $percent%"
@@ -179,8 +211,10 @@ class MainActivity : Activity() {
 
                 override fun onComplete(modelPath: String) {
 
-                    statusText.text =
-                        "Inaandaa Whisper Model..."
+                    runOnUiThread {
+                        statusText.text =
+                            "Inaandaa Whisper Model..."
+                    }
 
                     Thread {
 
@@ -190,6 +224,7 @@ class MainActivity : Activity() {
                         runOnUiThread {
 
                             if (loaded) {
+
                                 modelReady = true
 
                                 statusText.text =
@@ -200,6 +235,7 @@ class MainActivity : Activity() {
                                 )
 
                             } else {
+
                                 statusText.text =
                                     "Imeshindwa kuandaa Whisper Model."
 
@@ -209,11 +245,16 @@ class MainActivity : Activity() {
                             }
                         }
 
-                    }.start()
+                    }.apply {
+                        name = "Kisoti-ModelLoader"
+                        start()
+                    }
                 }
 
                 override fun onError(message: String) {
+
                     runOnUiThread {
+
                         statusText.text =
                             "Tatizo la Whisper Model: $message"
 
@@ -246,6 +287,7 @@ class MainActivity : Activity() {
         }
 
         startButton = Button(this).apply {
+
             text = "ANZA KUSIKILIZA"
 
             setOnClickListener {
@@ -254,6 +296,7 @@ class MainActivity : Activity() {
         }
 
         stopButton = Button(this).apply {
+
             text = "SIMAMISHA"
             isEnabled = false
 
@@ -263,6 +306,7 @@ class MainActivity : Activity() {
         }
 
         transcriptText = TextView(this).apply {
+
             text = "Matokeo ya sauti yataonekana hapa."
             textSize = 17f
             gravity = Gravity.CENTER
@@ -281,14 +325,16 @@ class MainActivity : Activity() {
     private fun checkMicrophonePermission() {
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
+            != PackageManager.PERMISSION_GRANTED
+        ) {
 
             requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
-                microphoneRequestCode
+                MICROPHONE_REQUEST_CODE
             )
 
         } else {
+
             startListening()
         }
     }
@@ -296,10 +342,15 @@ class MainActivity : Activity() {
     private fun startListening() {
 
         if (!modelReady) {
+
             statusText.text =
                 "Subiri Whisper Model iandaliwe kwanza."
 
             showToast("Whisper Model bado haijawa tayari.")
+            return
+        }
+
+        if (audioEngine.isRunning()) {
             return
         }
 
@@ -310,6 +361,7 @@ class MainActivity : Activity() {
         }
 
         synchronized(audioLock) {
+
             ringWritePosition = 0
             ringSamplesAvailable = 0
             samplesSinceLastInference = 0
@@ -319,6 +371,11 @@ class MainActivity : Activity() {
         firstWindowToastShown = false
         firstInferenceStarted = false
         busyToastShown = false
+
+        lastInferenceDurationMs = 0L
+        lastQueueDelayMs = 0L
+        droppedWindowCount = 0
+
         hasTranscript = false
 
         transcriptText.text = "Nasubiri sauti..."
@@ -336,6 +393,7 @@ class MainActivity : Activity() {
             showToast("Microphone imeanza. Ongea sasa.")
 
         } else {
+
             showToast("Microphone haikuweza kuanza.")
         }
     }
@@ -348,6 +406,7 @@ class MainActivity : Activity() {
         if (length <= 0) return
 
         if (!firstAudioToastShown) {
+
             firstAudioToastShown = true
 
             showToast(
@@ -377,8 +436,10 @@ class MainActivity : Activity() {
 
             samplesSinceLastInference += safeLength
 
-            if (ringSamplesAvailable >= windowSize &&
-                samplesSinceLastInference >= updateInterval) {
+            if (
+                ringSamplesAvailable >= windowSize &&
+                samplesSinceLastInference >= updateInterval
+            ) {
 
                 samplesSinceLastInference %= updateInterval
 
@@ -390,6 +451,7 @@ class MainActivity : Activity() {
                 }
 
                 if (!firstWindowToastShown) {
+
                     firstWindowToastShown = true
 
                     showToast(
@@ -397,8 +459,6 @@ class MainActivity : Activity() {
                     )
                 }
             }
-
-            Unit
         }
 
         snapshot?.let {
@@ -410,13 +470,24 @@ class MainActivity : Activity() {
 
         synchronized(pendingLock) {
 
-            pendingAudio = audioData.copyOf()
+            // Count a window only when it replaces another
+            // window that has not yet started processing.
+            if (pendingAudio != null) {
+                droppedWindowCount++
+            }
+
+            pendingAudio = PendingAudio(
+                samples = audioData.copyOf(),
+                sessionId = currentSession,
+                capturedAtMs = SystemClock.elapsedRealtime()
+            )
 
             if (!workerRunning) {
 
                 workerRunning = true
 
                 try {
+
                     transcriptionExecutor.execute {
                         processPendingAudio()
                     }
@@ -430,6 +501,7 @@ class MainActivity : Activity() {
                     )
 
                 } catch (e: Exception) {
+
                     workerRunning = false
                     pendingAudio = null
 
@@ -441,14 +513,13 @@ class MainActivity : Activity() {
             } else {
 
                 if (!busyToastShown) {
+
                     busyToastShown = true
 
                     showToast(
-                        "Whisper inachakata. Sauti mpya imehifadhiwa."
+                        "Whisper inachakata sauti mpya."
                     )
                 }
-
-                Unit
             }
         }
     }
@@ -457,7 +528,7 @@ class MainActivity : Activity() {
 
         while (true) {
 
-            val job = synchronized(pendingLock) {
+            val job: PendingAudio? = synchronized(pendingLock) {
 
                 val nextAudio = pendingAudio
 
@@ -472,10 +543,7 @@ class MainActivity : Activity() {
 
                     pendingAudio = null
 
-                    Pair(
-                        nextAudio,
-                        currentSession
-                    )
+                    nextAudio
                 }
             }
 
@@ -483,18 +551,36 @@ class MainActivity : Activity() {
                 return
             }
 
-            val audioData = job.first
-            val jobSession = job.second
+            val audioData = job.samples
+            val jobSession = job.sessionId
+
+            // Do not process obsolete sessions.
+            if (jobSession != currentSession) {
+                continue
+            }
 
             try {
 
                 if (processingSession != jobSession) {
+
                     processingSession = jobSession
+
                     previousWindowWords = emptyList()
                     inferenceResultCount = 0
                 }
 
+                val queueDelay =
+                    (
+                        SystemClock.elapsedRealtime() -
+                        job.capturedAtMs
+                    ).coerceAtLeast(0L)
+
+                if (jobSession == currentSession) {
+                    lastQueueDelayMs = queueDelay
+                }
+
                 if (!firstInferenceStarted) {
+
                     firstInferenceStarted = true
 
                     showToast(
@@ -502,18 +588,27 @@ class MainActivity : Activity() {
                     )
                 }
 
+                val inferenceStart =
+                    SystemClock.elapsedRealtime()
+
                 val result =
                     whisperBridge.transcribe(audioData).trim()
 
-                inferenceResultCount++
+                val inferenceDuration =
+                    SystemClock.elapsedRealtime() - inferenceStart
 
                 if (jobSession != currentSession) {
                     continue
                 }
 
+                lastInferenceDurationMs = inferenceDuration
+
+                inferenceResultCount++
+
                 if (result.isNotEmpty()) {
 
                     if (inferenceResultCount <= 3) {
+
                         showToast(
                             "Whisper imerudisha maandishi: ${result.length} herufi."
                         )
@@ -535,6 +630,7 @@ class MainActivity : Activity() {
                             }
 
                             if (!hasTranscript) {
+
                                 transcriptText.text = ""
                                 hasTranscript = true
                             }
@@ -547,22 +643,27 @@ class MainActivity : Activity() {
 
                 } else {
 
-                    if (inferenceResultCount <= 3) {
+                    if (inferenceResultCount < 3) {
+
                         showToast(
-                            "Whisper imerudisha matokeo tupu. Jaribio $inferenceResultCount."
+                            "Whisper imerudisha matokeo tupu."
                         )
                     }
                 }
 
             } catch (e: Exception) {
 
-                runOnUiThread {
-                    statusText.text =
-                        "Tatizo la STT: ${e.message}"
+                if (jobSession == currentSession) {
 
-                    showToast(
-                        "STT error: ${e.message}"
-                    )
+                    runOnUiThread {
+
+                        statusText.text =
+                            "Tatizo la STT: ${e.message}"
+
+                        showToast(
+                            "STT error: ${e.message}"
+                        )
+                    }
                 }
             }
         }
@@ -597,12 +698,14 @@ class MainActivity : Activity() {
                     normalizeWord(currentWords[i])
 
                 if (oldWord != newWord) {
+
                     matches = false
                     break
                 }
             }
 
             if (matches) {
+
                 overlap = size
                 break
             }
@@ -629,11 +732,12 @@ class MainActivity : Activity() {
                 val available =
                     minOf(ringSamplesAvailable, windowSize)
 
-                if (available >= sampleRate) {
+                if (available >= SAMPLE_RATE) {
 
                     val startPosition =
-                        (ringWritePosition - available + windowSize) %
-                                windowSize
+                        (
+                            ringWritePosition - available + windowSize
+                        ) % windowSize
 
                     ShortArray(available) { index ->
 
@@ -643,6 +747,7 @@ class MainActivity : Activity() {
                     }
 
                 } else {
+
                     null
                 }
             }
@@ -665,21 +770,24 @@ class MainActivity : Activity() {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
+
         super.onRequestPermissionsResult(
             requestCode,
             permissions,
             grantResults
         )
 
-        if (requestCode == microphoneRequestCode) {
+        if (requestCode == MICROPHONE_REQUEST_CODE) {
 
-            if (grantResults.isNotEmpty() &&
-                grantResults[0] ==
-                PackageManager.PERMISSION_GRANTED) {
+            if (
+                grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            ) {
 
                 startListening()
 
             } else {
+
                 statusText.text =
                     "Ruhusa ya microphone imekataliwa."
 
@@ -696,11 +804,18 @@ class MainActivity : Activity() {
 
         audioEngine.stop()
 
-        transcriptionExecutor.execute {
-            whisperBridge.close()
-        }
+        try {
 
-        transcriptionExecutor.shutdown()
+            transcriptionExecutor.execute {
+                whisperBridge.close()
+            }
+
+            transcriptionExecutor.shutdown()
+
+        } catch (_: Exception) {
+
+            transcriptionExecutor.shutdownNow()
+        }
 
         super.onDestroy()
     }
